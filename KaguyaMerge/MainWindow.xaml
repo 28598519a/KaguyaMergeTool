@@ -1,0 +1,19 @@
+﻿<Window x:Class="KaguyaMerge.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:KaguyaMerge"
+        mc:Ignorable="d"
+        Title="KaguyaCG合成" Height="170" Width="300">
+    <Grid Margin="0,0,0,1">
+        <Button x:Name="btn_folder" Content="選擇CG資料夾" HorizontalAlignment="Left" VerticalAlignment="Top" Width="80" Click="btn_folder_Click" Margin="10,10,0,0"/>
+        <Button x:Name="btn_deal_pic" Content="開始合成" HorizontalAlignment="Left" VerticalAlignment="Top" Width="80" Click="btn_deal_pic_Click" Margin="10,106,0,0"/>
+        <Button x:Name="btn_offset" Content="選擇Offset表" HorizontalAlignment="Left" VerticalAlignment="Top" Width="80" Click="btn_offset_Click" Margin="10,36,0,0"/>
+        <Label x:Name="lb_folder" Content="" HorizontalAlignment="Left" Margin="95,7,0,0" VerticalAlignment="Top" RenderTransformOrigin="0.512,0.807"/>
+        <Label x:Name="lb_offset" Content="" HorizontalAlignment="Left" Margin="95,33,0,0" VerticalAlignment="Top" RenderTransformOrigin="0.512,0.807"/>
+        <Label x:Name="lb_done" Content="" HorizontalAlignment="Left" Margin="95,102,0,0" VerticalAlignment="Top" RenderTransformOrigin="0.446,0.55"/>
+        <CheckBox x:Name="cb_anm" Content="一個anm建立一個資料夾" HorizontalAlignment="Left" Margin="10,64,0,0" VerticalAlignment="Top" IsChecked="True"/>
+        <CheckBox x:Name="cb_anm_OK" Content="分離不需合成的anm" HorizontalAlignment="Left" Margin="10,83,0,0" VerticalAlignment="Top" Checked="cb_anm_OK_Checked"/>
+    </Grid>
+</Window>
