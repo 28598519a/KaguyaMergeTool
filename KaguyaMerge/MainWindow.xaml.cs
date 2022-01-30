@@ -49,6 +49,13 @@ namespace KaguyaMerge
             }
         }
 
+        public enum C2B
+        {
+            No = 0,
+            Base = 1,
+            Part = 2
+        }
+
         private async void btn_deal_pic_Click(object sender, RoutedEventArgs e)
         {
             if ((lb_folder.Content.ToString() == String.Empty) || (lb_offset.Content.ToString() == String.Empty))
@@ -117,6 +124,8 @@ namespace KaguyaMerge
                     List<string> SpiltfileList = CGfileList.FindAll(find => new Regex($"{filename}[B-Z]モ[0-9]+甲").IsMatch(find));
 
                     Dictionary<string, int> spiltmax = new Dictionary<string, int>();
+                    Dictionary<string, int> spiltmin = new Dictionary<string, int>();
+                    int SpiltTotal = 0;
                     string spiltcharMax = "A";
                     string spiltcharMin = "Z";
                     foreach (string spilt in SpiltfileList)
@@ -131,10 +140,28 @@ namespace KaguyaMerge
                             spiltcharMin = Eng;
                         }
 
+                        int nownum = Convert.ToInt32(Regex.Match(Path.GetFileNameWithoutExtension(spilt), "モ[0-9]+").Value.Replace("モ", String.Empty));
                         if (!spiltmax.ContainsKey(spiltcharMax))
-                            spiltmax.Add(spiltcharMax, 0);
-
-                        spiltmax[spiltcharMax] = Math.Max(spiltmax[spiltcharMax], Convert.ToInt32(Regex.Match(Path.GetFileNameWithoutExtension(spilt), "モ[0-9]+").Value.Replace("モ", String.Empty)));
+                        {
+                            // 初始化
+                            spiltmax.Add(spiltcharMax, nownum);
+                            spiltmin.Add(spiltcharMax, nownum);
+                        }
+                        else
+                        {
+                            // 由於一組anm的モ[0-9]是相同的，所以只會被記為1次
+                            spiltmax[spiltcharMax] = Math.Max(spiltmax[spiltcharMax], nownum);
+                            spiltmax[spiltcharMax] = Math.Min(spiltmin[spiltcharMax], nownum);
+                        }
+                    }
+                    foreach (KeyValuePair<string, int> pair in spiltmax)
+                    {
+                        SpiltTotal += pair.Value;
+                    }
+                    foreach (KeyValuePair<string, int> pair in spiltmin)
+                    {
+                        // 多算的要扣掉，多減的要補回來
+                        SpiltTotal -= pair.Value + 1;
                     }
 
                     // 取得CG差分部件 (顏)
@@ -221,21 +248,58 @@ namespace KaguyaMerge
                             spiltnum++;
                         }
 
-                        // CG底複製至CG；CG底放到Used，與之後需要靠手動合成處理的部件分開
+                        // CG顏複製至CG；CG顏放到Used，與之後需要靠手動合成處理的部件分開
                         File.Copy(file, $"{App.OutputCG}/{filename}.png");
                         File.Move(file, $"{App.OutputUsed}/{filename}.png");
+
+                        // 沒有差分部件，所以後續不用執行
                         continue;
                     }
 
                     char nowFaceEng = 'A';
                     string ImgBase = null;
-                    bool BaseCalc = true;
+                    string ImgBaseB = String.Empty;
                     string preEng = Regex.Match(Path.GetFileNameWithoutExtension(SpiltfileList[0]), "[B-Z]モ").Value.Replace("モ", String.Empty);
                     string prespilt = String.Empty;
                     string preout = String.Empty;
                     int appendnum = 0;
+                    C2B MergeC2B = C2B.No;
 
-                    // CG、CG顏 + 差分部件 (甲) 
+                    // 如果只有單表情，檢查是否有差分部件 (C1甲)，此等同於B的底圖
+                    if (spiltcharMin == "B")
+                    {
+                        foreach (string spilt in SpiltfileList)
+                        {
+                            string spiltname = Path.GetFileNameWithoutExtension(spilt);
+                            string Eng = Regex.Match(spiltname, "[B-Z]モ").Value.Replace("モ", String.Empty);
+
+                            if (spiltname.Contains("Cモ1甲"))
+                            {
+                                ImgBaseB = spilt;
+
+                                using (Bitmap bmp = new Bitmap(file))
+                                {
+                                    string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+                                    Color pixelColor = bmp.GetPixel(Offset[spiltnameB].Item1 + 2, Offset[spiltnameB].Item2 + 2);
+
+                                    //看看CG底的那個位置是不是空白的，如果是就是底的一部分，如果不是就是部件
+                                    if (pixelColor.ToString() == "#FFFFFF")
+                                        MergeC2B = C2B.Base;
+                                    else
+                                        MergeC2B = C2B.Part;
+                                }
+
+                                // 該差分部件為B底的一部分，所以要從List拿掉另外處理
+                                SpiltfileList.Remove(spilt);
+                                SpiltTotal -= 1;
+
+                                // 修改List後，不可再繼續執行此迴圈
+                                break;
+                            }
+                        }
+                    }
+
+                    // CG、CG顏 + 差分部件 (甲)
                     foreach (string spilt in SpiltfileList)
                     {
                         string spiltname = Path.GetFileNameWithoutExtension(spilt);
@@ -247,11 +311,20 @@ namespace KaguyaMerge
                         {
                             string prespiltname = Path.GetFileNameWithoutExtension(prespilt);
 
-                            // 只有單角色表情，表示C的表情直接沿用B的最後一個合成底圖來合就好
+                            // 只有單角色表情，則C應沿用B的最後一個合成圖為底來合
                             if (spiltcharMin == "B")
                             {
-                                ImgBase = preout;
-                                BaseCalc = false;
+                                // 更新CG顏 (沿用前一個小組 (ex:B)的最後一個合成圖為底來合上顏)
+                                foreach (string face in FacefileList)
+                                {
+                                    string facename = Path.GetFileNameWithoutExtension(face);
+                                    string outpathface = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
+                                    if (Offset.ContainsKey(facename))
+                                    {
+                                        // 要取用已經移到Used的顏 (針對會存取到Used資料夾的操作都必須小心)
+                                        Merge(preout, $"{App.OutputUsed}/{facename}.png", Offset[facename].Item1, Offset[facename].Item2, outpathface);
+                                    }
+                                }
                             }
                             else
                             {
@@ -282,15 +355,13 @@ namespace KaguyaMerge
                             appendnum += Convert.ToInt32(Regex.Match(prespiltname, "モ[0-9]+").Value.Replace("モ", String.Empty));
                         }
 
-                        if (BaseCalc == true)
-                        {
-                            // 間隔多少換下一張臉的參考值
-                            double facebase = (double)spiltmax[nowEng] / (double)facemax[nowFaceEng];
-                            int facenum = Convert.ToInt32(Math.Round((double)spiltnum / facebase));
-                            if (facenum < 1) facenum = 1;
+                        // 間隔多少換下一張顏的參考值
+                        double facebase = (double)SpiltTotal / (double)facemax[nowFaceEng];
+                        int facenum = Convert.ToInt32(Math.Round((double)spiltnum / facebase));
+                        if (facenum < 1) facenum = 1;
 
-                            ImgBase = CGfaceList[facenum - 1];
-                        }
+                        // 決定該差分部件要用哪個顏為底來合成
+                        ImgBase = CGfaceList[facenum - 1];
 
                         string anm = Regex.Match(spiltname, "#[0-9]+").Value;
                         int outnum = spiltnum + appendnum;
@@ -318,14 +389,45 @@ namespace KaguyaMerge
 
                         Merge(ImgBase, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
 
+                        // 針對有Cモ1甲的情況合成進B的圖
+                        if (nowEng == "B")
+                        {
+                            string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+
+                            // 針對是 整個B的CG底一部分 or B1甲的物件 分別處理
+                            if (MergeC2B == C2B.Base)
+                            {
+                                // 剛才合的 + Cモ1甲取代掉剛才合的
+                                Merge(outpath, ImgBaseB, Offset[spiltnameB].Item1, Offset[spiltnameB].Item2, outpath);
+                            }
+                            else if (spiltnum == 1 && MergeC2B == C2B.Part)
+                            {
+                                Merge(outpath, ImgBaseB, Offset[spiltnameB].Item1, Offset[spiltnameB].Item2, outpath);
+                            }
+                        }
+
                         // 刷新合成進度
                         lb_done.Content = counter++;
                         await Task.Delay(1);
 
+                        // CG底的表情與顏1並不同，所以要合成一張CG底與第一張差分的結果
                         if (outnum == 1)
                         {
                             outpath = $"{App.OutputCG}/{filename}.png";
                             Merge(file, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
+
+                            // 針對有Cモ1甲的情況合成進B的圖
+                            if (nowEng == "B")
+                            {
+                                // 針對是CG底本身有空白的情況來處理
+                                if (MergeC2B == C2B.Base)
+                                {
+                                    string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+
+                                    // 剛才合的 + Cモ1甲取代掉剛才合的
+                                    Merge(outpath, ImgBaseB, Offset[spiltnameB].Item1, Offset[spiltnameB].Item2, outpath);
+                                }
+                            }
 
                             // 刷新合成進度
                             lb_done.Content = counter++;
@@ -333,8 +435,12 @@ namespace KaguyaMerge
                         }
 
                         // 拿來合過的CG甲放到Used，與之後需要靠手動合成處理的部件分開 (這裡不能用spiltname，因為中間要查座標的時候動過名稱)
-                        File.Move(spilt, $"{App.OutputUsed}/{Path.GetFileNameWithoutExtension(spilt)}.png");
+                        File.Move(spilt, $"{App.OutputUsed}/{Path.GetFileName(spilt)}");
                     }
+
+                    // 拿來合過的C1甲放到Used，與之後需要靠手動合成處理的部件分開
+                    if (ImgBaseB != String.Empty)
+                        File.Move(ImgBaseB, $"{App.OutputUsed}/{Path.GetFileName(ImgBaseB)}");
 
                     // 拿來合過的CG底放到Used，與之後需要靠手動合成處理的部件分開
                     File.Move(file, $"{App.OutputUsed}/{filename}.png");
@@ -353,6 +459,7 @@ namespace KaguyaMerge
                         if (!Directory.Exists(App.AnmBackup))
                             Directory.CreateDirectory(App.AnmBackup);
 
+                        bool folder_chg = false;
                         foreach (string anm in AnmfileList1)
                         {
                             string anmname = Path.GetFileNameWithoutExtension(anm);
@@ -362,10 +469,21 @@ namespace KaguyaMerge
                             string outputpath = $"{App.OutputAnm}/{filename}_{spiltnum}";
                             string append = "";
 
-                            if (Directory.Exists(outputpath))
+                            // 換一組anm時要先重置append設定
+                            if (anmnum == "#00")
+                                folder_chg = false;
+
+                            if (Directory.Exists(outputpath) || folder_chg == true)
                             {
-                                append = "B";
-                                outputpath += append;
+                                // 只能對第一個anm判斷是要換資料夾，後續須延續第一個的append設定
+                                if (anmnum == "#00")
+                                    folder_chg = true;
+
+                                if (folder_chg == true)
+                                {
+                                    append = "B";
+                                    outputpath += append;
+                                }
                             }
 
                             if (cb_anm.IsChecked == true)
