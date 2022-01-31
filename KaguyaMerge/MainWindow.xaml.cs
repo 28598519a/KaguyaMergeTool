@@ -126,6 +126,7 @@ namespace KaguyaMerge
                     Dictionary<string, int> spiltmax = new Dictionary<string, int>();
                     Dictionary<string, int> spiltmin = new Dictionary<string, int>();
                     int SpiltTotal = 0;
+                    int SpiltCount = 0;
                     string spiltcharMax = "A";
                     string spiltcharMin = "Z";
                     foreach (string spilt in SpiltfileList)
@@ -151,7 +152,7 @@ namespace KaguyaMerge
                         {
                             // 由於一組anm的モ[0-9]是相同的，所以只會被記為1次
                             spiltmax[spiltcharMax] = Math.Max(spiltmax[spiltcharMax], nownum);
-                            spiltmax[spiltcharMax] = Math.Min(spiltmin[spiltcharMax], nownum);
+                            spiltmin[spiltcharMax] = Math.Min(spiltmin[spiltcharMax], nownum);
                         }
                     }
                     foreach (KeyValuePair<string, int> pair in spiltmax)
@@ -161,14 +162,21 @@ namespace KaguyaMerge
                     foreach (KeyValuePair<string, int> pair in spiltmin)
                     {
                         // 多算的要扣掉，多減的要補回來
-                        SpiltTotal -= pair.Value + 1;
+                        SpiltTotal = (SpiltTotal - pair.Value) + 1;
                     }
+
+                    // 多表情+多部件組的要單獨按組算
+                    if (spiltcharMin != "B" && spiltcharMin != spiltcharMax && spiltmax.Count != 0)
+                    {
+                        SpiltTotal = spiltmax[spiltcharMin] - spiltmin[spiltcharMin] + 1;
+                    }
+                    SpiltCount = SpiltTotal;
 
                     // 取得CG差分部件 (顏)
                     List<string> CGfaceList = new List<string>();
                     List<string> FacefileList = new List<string>();
                     Dictionary<char, int> facemax = new Dictionary<char, int>();
-                    FacefileList = CGfileList.FindAll(find => new Regex($"{filename}A顔[0-9]+").IsMatch(find));
+                    FacefileList = CGfileList.FindAll(find => new Regex($"{filename}[A-Z]顔[0-9]+").IsMatch(find));
 
                     // 無表情表示該CG為唯一 or 只有 (部)需進行手動合成
                     if (FacefileList.Count == 0)
@@ -176,52 +184,168 @@ namespace KaguyaMerge
 
                     if (SpiltfileList.Count != 0)
                     {
-                        foreach (string face in FacefileList)
+                        // 多表情 (依序且非同步) + 多部件組
+                        if (spiltcharMin != "B" && spiltcharMin != spiltcharMax)
                         {
-                            string facename = Path.GetFileNameWithoutExtension(face);
-                            string outpath = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
-                            if (Offset.ContainsKey(facename))
+                            List<string> tmplist = new List<string>();
+
+                            // 如果有多表情+多部件組，則從第一個差分組開始檢查是否有 (?1甲)，必須跟CG底合併後才能合顏
+                            foreach (string spilt in SpiltfileList)
                             {
-                                Merge(file, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
-                                CGfaceList.Add(outpath);
+                                string spiltname = Path.GetFileNameWithoutExtension(spilt);
+                                string Eng = Regex.Match(spiltname, "[C-Z]モ").Value.Replace("モ", String.Empty);
 
-                                if (!facemax.ContainsKey('A'))
-                                    facemax.Add('A', 0);
+                                // 根據ASCII表，英文字母是連續的
+                                for (char c = Convert.ToChar(spiltcharMin); c <= Convert.ToChar(spiltcharMax); c++)
+                                {
+                                    if (spiltname.Contains(c.ToString() + "モ1甲"))
+                                    {
+                                        Color pixelColor = new Color();
 
-                                facemax['A'] = facemax['A']++;
+                                        // 先檢查CG底確實有缺失的空白處，再合併上去
+                                        using (Bitmap bmp = new Bitmap(file))
+                                        {
+                                            int count = 0;
+                                            using (Bitmap bmpB = new Bitmap(spilt))
+                                            {
+                                                // 因為有些位置會有液體導致判斷錯誤，因此做3次採樣 (只要成功一次就算有)
+                                                do
+                                                {
+                                                    int w = 0;
+                                                    int h = 0;
+
+                                                    // 先找1甲計算出有顏色的中心點，再拿回CG底做檢查
+                                                    switch (count)
+                                                    {
+                                                        case 0:
+                                                            // 從中間
+                                                            h = (bmpB.Height - 1) / 2;
+                                                            break;
+                                                        case 1:
+                                                            // 從上面
+                                                            h = (bmpB.Height - 1) / 4;
+                                                            break;
+                                                        case 2:
+                                                            // 從下面
+                                                            h = (bmpB.Height - 1) - ((bmpB.Height - 1) / 4);
+                                                            break;
+                                                    }
+
+                                                    int x01 = 0;
+                                                    int x02 = 0;
+                                                    for (int x = 0; x < bmpB.Width; x++)
+                                                    {
+                                                        if (bmpB.GetPixel(x, h).A != 0)
+                                                        {
+                                                            x01 = x;
+                                                            break;
+                                                        }
+                                                    }
+                                                    for (int x = bmpB.Width - 1; x >= 0; x--)
+                                                    {
+                                                        if (bmpB.GetPixel(x, h).A != 0)
+                                                        {
+                                                            x02 = x;
+                                                            break;
+                                                        }
+                                                    }
+                                                    w = (x01 + x02) / 2;
+
+                                                    pixelColor = bmp.GetPixel(Offset[spiltname].Item1 + w, Offset[spiltname].Item2 + h);
+                                                    count++;
+                                                }
+                                                while (!pixelColor.ToArgb().Equals(Color.White.ToArgb()) && count < 3);
+                                            }
+
+                                            // 先把要合上的所有1甲差分部件 + CG底
+                                            if (pixelColor.ToArgb().Equals(Color.White.ToArgb()))
+                                            {
+                                                string outpath = $"{App.OutputFace}/{filename}.png";
+                                                if (!File.Exists(outpath))
+                                                {
+                                                    Merge(file, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
+                                                }
+                                                else
+                                                {
+                                                    Merge(outpath, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
+                                                }
+                                            }
+                                        }
+
+                                        // 先存著，等跑完再把這些用掉的差分部件做處理
+                                        tmplist.Add(spilt);
+                                    }
+                                }
+                            }
+
+                            foreach (string s in tmplist)
+                            {
+                                // 該差分部件為B底的一部分，所以要從List拿掉另外處理
+                                SpiltfileList.Remove(s);
+                                SpiltTotal -= 1;
+
+                                // 拿來合過的差分部件放到Used，與之後需要靠手動合成處理的部件分開
+                                File.Move(s, $"{App.OutputUsed}/{Path.GetFileName(s)}");
+                            }
+
+                            FacefileList = CGfileList.FindAll(find => new Regex($"{filename}[A-Z]顔[0-9]+").IsMatch(find));
+
+                            // 合上A顏 (後續的顏等合差分部件處在處理)
+                            foreach (string face in FacefileList.FindAll(find => new Regex($"{filename}A顔[0-9]+").IsMatch(find)))
+                            {
+                                string facename = Path.GetFileNameWithoutExtension(face);
+                                string outpath = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
+                                string tmpfile = $"{App.OutputFace}/{filename}.png";
+                                if (Offset.ContainsKey(facename))
+                                {
+                                    Merge(tmpfile, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
+                                    CGfaceList.Add(outpath);
+
+                                    if (!facemax.ContainsKey('A'))
+                                        facemax.Add('A', 0);
+
+                                    facemax['A'] = facemax['A']++;
+                                }
 
                                 // 拿來合過的CG顏放到Used，與之後需要靠手動合成處理的部件分開
                                 File.Move(face, $"{App.OutputUsed}/{facename}.png");
                             }
                         }
-
-                        // 針對一張CG包含多個角色 (顏)的部分進行處理
-                        if (spiltcharMin != "B")
+                        else
                         {
-                            FacefileList = CGfileList.FindAll(find => new Regex($"{filename}[B-Z]顔[0-9]+").IsMatch(find));
-
-                            // 多角色表情同步變化 (後續的CG甲應只有1組)
-                            if (spiltcharMin == spiltcharMax)
+                            foreach (string face in FacefileList)
                             {
-                                foreach (string face in FacefileList)
+                                string facename = Path.GetFileNameWithoutExtension(face);
+                                string outpath = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
+                                if (Offset.ContainsKey(facename))
                                 {
-                                    string facename = Path.GetFileNameWithoutExtension(face);
-                                    string outpath = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
-                                    if (Offset.ContainsKey(facename))
+                                    // 先做常規CG底+A顔
+                                    if (facename.Contains("A顔"))
                                     {
-                                        // 直接取代A顏
-                                        Merge(outpath, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
+                                        Merge(file, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
+                                        CGfaceList.Add(outpath);
 
-                                        // 拿來合過的CG顏放到Used，與之後需要靠手動合成處理的部件分開
-                                        File.Move(face, $"{App.OutputUsed}/{facename}.png");
+                                        if (!facemax.ContainsKey('A'))
+                                            facemax.Add('A', 0);
+
+                                        facemax['A'] = facemax['A']++;
                                     }
+                                    else if (spiltcharMin == spiltcharMax)
+                                    {
+                                        // 多角色表情同步變化 (後續的CG甲應只有1組)
+                                        // 直接取代A顔
+                                        Merge(outpath, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
+                                    }
+
+                                    // 拿來合過的CG顏放到Used，與之後需要靠手動合成處理的部件分開
+                                    File.Move(face, $"{App.OutputUsed}/{facename}.png");
                                 }
                             }
                         }
                     }
                     else
                     {
-                        // 只有表情
+                        // 只有表情，沒差分部件
                         int spiltnum = 1;
                         foreach (string anm in AnmfileList1.FindAll(find => new Regex(filename).IsMatch(find)))
                         {
@@ -252,6 +376,10 @@ namespace KaguyaMerge
                         File.Copy(file, $"{App.OutputCG}/{filename}.png");
                         File.Move(file, $"{App.OutputUsed}/{filename}.png");
 
+                        // 刷新合成進度
+                        lb_done.Content = counter++;
+                        await Task.Delay(1);
+
                         // 沒有差分部件，所以後續不用執行
                         continue;
                     }
@@ -261,13 +389,14 @@ namespace KaguyaMerge
                     string ImgBaseB = String.Empty;
                     string preEng = Regex.Match(Path.GetFileNameWithoutExtension(SpiltfileList[0]), "[B-Z]モ").Value.Replace("モ", String.Empty);
                     string prespilt = String.Empty;
+                    string prespiltKey = String.Empty;
                     string preout = String.Empty;
                     int appendnum = 0;
                     C2B MergeC2B = C2B.No;
 
-                    // 如果只有單表情，檢查是否有差分部件 (C1甲)，此等同於B的底圖
                     if (spiltcharMin == "B")
                     {
+                        // 如果只有單表情，檢查是否有差分部件 (C1甲)，此等同於B的底圖
                         foreach (string spilt in SpiltfileList)
                         {
                             string spiltname = Path.GetFileNameWithoutExtension(spilt);
@@ -276,14 +405,67 @@ namespace KaguyaMerge
                             if (spiltname.Contains("Cモ1甲"))
                             {
                                 ImgBaseB = spilt;
+                                string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+                                Color pixelColor = new Color();
 
                                 using (Bitmap bmp = new Bitmap(file))
                                 {
-                                    string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
-                                    Color pixelColor = bmp.GetPixel(Offset[spiltnameB].Item1 + 2, Offset[spiltnameB].Item2 + 2);
+                                    int count = 0;
+                                    using (Bitmap bmpB = new Bitmap(ImgBaseB))
+                                    {
+                                        // 因為有些位置會有液體導致判斷錯誤，因此做3次採樣
+                                        do
+                                        {
+                                            int w = 0;
+                                            int h = 0;
 
-                                    //看看CG底的那個位置是不是空白的，如果是就是底的一部分，如果不是就是部件
-                                    if (pixelColor.ToString() == "#FFFFFF")
+                                            // ImgBaseB會大於空白區，所以要計算出有顏色的中心點，不能直接用邊緣
+                                            switch (count)
+                                            {
+                                                case 0:
+                                                    // 從中間
+                                                    h = (bmpB.Height - 1) / 2;
+                                                    break;
+                                                case 1:
+                                                    // 從上面
+                                                    h = (bmpB.Height - 1) / 4;
+                                                    break;
+                                                case 2:
+                                                    // 從下面
+                                                    h = (bmpB.Height - 1) - ((bmpB.Height - 1) / 4);
+                                                    break;
+                                            }
+
+
+                                            int x01 = 0;
+                                            int x02 = 0;
+                                            for (int x = 0; x < bmpB.Width; x++)
+                                            {
+                                                if (bmpB.GetPixel(x, h).A != 0)
+                                                {
+                                                    x01 = x;
+                                                    break;
+                                                }
+                                            }
+                                            for (int x = bmpB.Width - 1; x >= 0; x--)
+                                            {
+                                                if (bmpB.GetPixel(x, h).A != 0)
+                                                {
+                                                    x02 = x;
+                                                    break;
+                                                }
+                                            }
+                                            w = (x01 + x02) / 2;
+
+                                            pixelColor = bmp.GetPixel(Offset[spiltnameB].Item1 + w, Offset[spiltnameB].Item2 + h);
+                                            count++;
+                                        }
+                                        while (!pixelColor.ToArgb().Equals(Color.White.ToArgb()) && count < 3);
+                                    }
+
+                                    // 看看CG底的那個位置是不是空白的，如果是就是底的一部分，如果不是就是部件
+                                    // https://stackoverflow.com/questions/28920332/result-of-color-getpixel-equalscolor-blue-comes-out-false
+                                    if (pixelColor.ToArgb().Equals(Color.White.ToArgb()))
                                         MergeC2B = C2B.Base;
                                     else
                                         MergeC2B = C2B.Part;
@@ -311,26 +493,33 @@ namespace KaguyaMerge
                         {
                             string prespiltname = Path.GetFileNameWithoutExtension(prespilt);
 
-                            // 只有單角色表情，則C應沿用B的最後一個合成圖為底來合
+                            // 只有單角色表情，則更新CG顏 (CG底 + 顏 + 前一個小組 (ex:B)的最後一個差分部件，不能直接沿用最後一張圖為底，因為差分部件跟顏可能有交疊)
                             if (spiltcharMin == "B")
                             {
-                                // 更新CG顏 (沿用前一個小組 (ex:B)的最後一個合成圖為底來合上顏)
+                                // 要取用CG底 + 已經移到Used的最後一次用的差分部件 (針對會存取到Used資料夾的操作都必須小心)
+                                string tmpfile = $"{App.OutputFace}/{filename}_tmp.png";
+                                Merge(file, prespilt, Offset[prespiltKey].Item1, Offset[prespiltKey].Item2, tmpfile);
+
                                 foreach (string face in FacefileList)
                                 {
                                     string facename = Path.GetFileNameWithoutExtension(face);
-                                    string outpathface = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
+                                    string outface = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
+
                                     if (Offset.ContainsKey(facename))
                                     {
                                         // 要取用已經移到Used的顏 (針對會存取到Used資料夾的操作都必須小心)
-                                        Merge(preout, $"{App.OutputUsed}/{facename}.png", Offset[facename].Item1, Offset[facename].Item2, outpathface);
+                                        Merge(tmpfile, $"{App.OutputUsed}/{facename}.png", Offset[facename].Item1, Offset[facename].Item2, outface);
                                     }
                                 }
                             }
                             else
                             {
-                                // 有多角色表情且異步變化，則應由最後合的CG甲，合下一個角色的表情後直接更新取代A顏 (角色數量 & 差分部件甲組數 應相同)
+                                // 有多角色表情且異步變化，則應由最後合的CG甲，合下一個角色的表情後直接更新取代A顏 (顏組數 & 差分部件甲組數 應相同)
                                 CGfaceList.Clear();
                                 nowFaceEng++;
+                                SpiltTotal = spiltmax[nowEng] - spiltmin[nowEng] + 1;
+
+                                // 從A-Z顏中，只取出現在要用的一組顔來處理
                                 foreach (string face in FacefileList.FindAll(find => new Regex($"{filename}{nowFaceEng}顔[0-9]+").IsMatch(find)))
                                 {
                                     string facename = Path.GetFileNameWithoutExtension(face);
@@ -338,6 +527,7 @@ namespace KaguyaMerge
                                     string facepath = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
                                     if (Offset.ContainsKey(facename))
                                     {
+                                        // !!!如果會有差分部件跟顏可能有交疊的狀況，就要考慮按上面單表情的方式處理!!!
                                         Merge(preout, face, Offset[facename].Item1, Offset[facename].Item2, facepath);
                                         CGfaceList.Add(facepath);
 
@@ -356,7 +546,7 @@ namespace KaguyaMerge
                         }
 
                         // 間隔多少換下一張顏的參考值
-                        double facebase = (double)SpiltTotal / (double)facemax[nowFaceEng];
+                        double facebase = (double)SpiltCount / (double)facemax[nowFaceEng];
                         int facenum = Convert.ToInt32(Math.Round((double)spiltnum / facebase));
                         if (facenum < 1) facenum = 1;
 
@@ -367,13 +557,15 @@ namespace KaguyaMerge
                         int outnum = spiltnum + appendnum;
                         string outpath = $"{App.OutputCG}/{filename}_{outnum}.png";
 
-                        // 紀錄最後一個非差分部件的名稱
+                        // 紀錄最後一個前一次部件的資訊，方便取用
                         prespilt = $"{App.OutputUsed}/{spiltname}.png";
+                        preEng = nowEng;
+                        preout = outpath;
                         if (anm == String.Empty)
-                        {
-                            preEng = nowEng;
-                            preout = outpath;
-                        }
+                            prespiltKey = spiltname;
+                        else
+                            prespiltKey = spiltname.Replace(anm, String.Empty).Replace("甲", "乙");
+
 
                         // 如果是anm，要用乙的座標去查
                         if (anm != String.Empty)
@@ -413,20 +605,30 @@ namespace KaguyaMerge
                         // CG底的表情與顏1並不同，所以要合成一張CG底與第一張差分的結果
                         if (outnum == 1)
                         {
+                            string tmpfile = $"{App.OutputFace}/{filename}.png";
                             outpath = $"{App.OutputCG}/{filename}.png";
-                            Merge(file, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
 
-                            // 針對有Cモ1甲的情況合成進B的圖
-                            if (nowEng == "B")
+                            if (!File.Exists(tmpfile))
                             {
-                                // 針對是CG底本身有空白的情況來處理
-                                if (MergeC2B == C2B.Base)
-                                {
-                                    string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+                                Merge(file, spilt, Offset[spiltname].Item1, Offset[spiltname].Item2, outpath);
 
-                                    // 剛才合的 + Cモ1甲取代掉剛才合的
-                                    Merge(outpath, ImgBaseB, Offset[spiltnameB].Item1, Offset[spiltnameB].Item2, outpath);
+                                // 針對有Cモ1甲的情況合成進B的圖
+                                if (nowEng == "B")
+                                {
+                                    // 針對是CG底本身有空白的情況來處理
+                                    if (MergeC2B == C2B.Base)
+                                    {
+                                        string spiltnameB = Path.GetFileNameWithoutExtension(ImgBaseB);
+
+                                        // 剛才合的 + Cモ1甲取代掉剛才合的
+                                        Merge(outpath, ImgBaseB, Offset[spiltnameB].Item1, Offset[spiltnameB].Item2, outpath);
+                                    }
                                 }
+                            }
+                            else
+                            {
+                                // 多表情 (依序且非同步) + 多部件組的情況的底是有處理好的存在CG顏資料夾裡
+                                File.Move(tmpfile, outpath);
                             }
 
                             // 刷新合成進度
@@ -446,6 +648,7 @@ namespace KaguyaMerge
                     File.Move(file, $"{App.OutputUsed}/{filename}.png");
                 }
 
+                // 所有合成動作完成後，刪掉CG顏資料夾
                 if (Directory.Exists(App.OutputFace))
                     Directory.Delete(App.OutputFace, true);
 
@@ -515,7 +718,12 @@ namespace KaguyaMerge
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show($"失敗：{ex.Message}");
+                // Debug模式下出現錯誤要顯示出包含錯誤行數的資訊，才能在不動try-catch的情況下直接去下斷點偵錯
+                #if DEBUG
+                    System.Windows.MessageBox.Show($"失敗：{ex.ToString()}");
+                #else
+                    System.Windows.MessageBox.Show($"失敗：{ex.Message}");
+                #endif
             }
 
             // 合成完成，跳通知告知結果
