@@ -33,6 +33,8 @@ namespace KaguyaMerge
             }
 
             App.Folder = selectPath;
+            App.OutputRoot = selectPath;
+            App.UpdateVar();
             lb_folder.Content = Path.GetFileName(selectPath);
         }
 
@@ -58,9 +60,16 @@ namespace KaguyaMerge
 
         private async void btn_deal_pic_Click(object sender, RoutedEventArgs e)
         {
-            if ((lb_folder.Content.ToString() == String.Empty) || (lb_offset.Content.ToString() == String.Empty))
+            if (String.IsNullOrEmpty(lb_folder.Content.ToString()) || String.IsNullOrEmpty(lb_offset.Content.ToString()))
             {
                 System.Windows.MessageBox.Show("需要選擇資料夾、Offset表才能合成！");
+                return;
+            }
+
+            // 有指定CG資料夾，但沒呼叫UpdateVar()時會出現的情況
+            if (String.IsNullOrEmpty(App.OutputRoot))
+            {
+                System.Windows.MessageBox.Show("輸出資料夾指定異常，請檢查UpdateVar()是否有正確呼叫！");
                 return;
             }
 
@@ -112,6 +121,8 @@ namespace KaguyaMerge
 
                 foreach (string file in CGfileList_B)
                 {
+                    // 計算每一組CG底的合成次數
+                    int BaseCounter = 0;
                     string filename = Path.GetFileNameWithoutExtension(file);
 
                     // 放棄無法自動處理的CG
@@ -362,6 +373,7 @@ namespace KaguyaMerge
                                 Merge(file, face, Offset[facename].Item1, Offset[facename].Item2, outpath);
 
                                 // 刷新合成進度
+                                BaseCounter++;
                                 lb_done.Content = counter++;
                                 await Task.Delay(1);
 
@@ -377,6 +389,7 @@ namespace KaguyaMerge
                         File.Move(file, $"{App.OutputUsed}/{filename}.png");
 
                         // 刷新合成進度
+                        BaseCounter++;
                         lb_done.Content = counter++;
                         await Task.Delay(1);
 
@@ -493,23 +506,13 @@ namespace KaguyaMerge
                         {
                             string prespiltname = Path.GetFileNameWithoutExtension(prespilt);
 
-                            // 只有單角色表情，則更新CG顏 (CG底 + 顏 + 前一個小組 (ex:B)的最後一個差分部件，不能直接沿用最後一張圖為底，因為差分部件跟顏可能有交疊)
+                            // 只有單角色表情，則更新CG顏
                             if (spiltcharMin == "B")
                             {
-                                // 要取用CG底 + 已經移到Used的最後一次用的差分部件 (針對會存取到Used資料夾的操作都必須小心)
-                                string tmpfile = $"{App.OutputFace}/{filename}_tmp.png";
-                                Merge(file, prespilt, Offset[prespiltKey].Item1, Offset[prespiltKey].Item2, tmpfile);
-
-                                foreach (string face in FacefileList)
+                                // 直接更新取代CG顏，用CG顏 + 已經移到Used的最後一次用的差分部件 (針對會存取到Used資料夾的操作都必須小心)
+                                foreach (string CGface in CGfaceList)
                                 {
-                                    string facename = Path.GetFileNameWithoutExtension(face);
-                                    string outface = $"{App.OutputFace}/{filename}_{Regex.Match(facename, "顔[0-9]+")}.png";
-
-                                    if (Offset.ContainsKey(facename))
-                                    {
-                                        // 要取用已經移到Used的顏 (針對會存取到Used資料夾的操作都必須小心)
-                                        Merge(tmpfile, $"{App.OutputUsed}/{facename}.png", Offset[facename].Item1, Offset[facename].Item2, outface);
-                                    }
+                                    Merge(CGface, prespilt, Offset[prespiltKey].Item1, Offset[prespiltKey].Item2, CGface);
                                 }
                             }
                             else
@@ -599,11 +602,12 @@ namespace KaguyaMerge
                         }
 
                         // 刷新合成進度
+                        BaseCounter++;
                         lb_done.Content = counter++;
                         await Task.Delay(1);
 
-                        // CG底的表情與顏1並不同，所以要合成一張CG底與第一張差分的結果
-                        if (outnum == 1)
+                        // CG底的表情與顏1並不同，所以要合成一張CG底與第一張差分的結果 (不能用outnum，因為第一個差分不一定是1甲)
+                        if (BaseCounter == 1)
                         {
                             string tmpfile = $"{App.OutputFace}/{filename}.png";
                             outpath = $"{App.OutputCG}/{filename}.png";
@@ -632,6 +636,7 @@ namespace KaguyaMerge
                             }
 
                             // 刷新合成進度
+                            BaseCounter++;
                             lb_done.Content = counter++;
                             await Task.Delay(1);
                         }
@@ -665,6 +670,7 @@ namespace KaguyaMerge
                         bool folder_chg = false;
                         foreach (string anm in AnmfileList1)
                         {
+                            // 無需合成的anm不應該有出現在新一組差分部件後的情況 (ex: 有B甲、C甲，則該種anm應只出現在B的範圍內)
                             string anmname = Path.GetFileNameWithoutExtension(anm);
                             string filename = Regex.Match(anmname, "cg[0-9]+").Value;
                             int spiltnum = Convert.ToInt32(Regex.Match(anmname, "モ[0-9]+").Value.Replace("モ", String.Empty));
@@ -769,6 +775,7 @@ namespace KaguyaMerge
 
         private void cb_anm_OK_Checked(object sender, RoutedEventArgs e)
         {
+            // 另外要考慮到 _1 跟 部 的組是被放棄合成的，這樣分離anm的時候命名上可能會有問題 (考慮之後加一個判斷CG資料夾內其餘差分部件檔名後在做分離)
             System.Windows.MessageBox.Show("勾選此功能請確保CG資料夾中 : \n" +
                 "1. 在按下\"開始合成\"後，結束合成時裡面會有全遊戲CG自動合成後的檔案，否則可能會命名錯誤!\n" +
                 "2. 裡面沒有與欲分離的檔案重複的內容，否則可能會以B的資料夾分類重複出現 (也就是說分離操作應是第一次執行)", "注意事項");
