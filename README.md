@@ -1,6 +1,6 @@
 # KaguyaMerge
 
-### Since the CG merge definition has been parsed from params.dat, a new repo will be opened with this guessing version of KaguyaMerge will be deprecated
+### Since the CG merge definition has been parsed from params.dat, a new repo will be opened and this guess merge version of KaguyaMerge will be deprecated.
 ### This is new version of [KaguyaMerge](https://github.com/28598519a/KaguyaMerge)
 
 用於自動化合成Atelier Kaguya的CG (目前約20%的CG仍需手動合成)
